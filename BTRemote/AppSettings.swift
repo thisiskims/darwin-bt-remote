@@ -9,14 +9,18 @@ enum AppSettings {
     static let liveTypingKey = "liveTyping"
     static let remoteModeKey = "remoteMode"
     static let transportKey = "transport"
+    static let topEdgeCrossingKey = "topEdgeCrossing"
+    static let ipadVirtualHeightKey = "ipadVirtualHeight"
 
     static let maxAdvertisedNameLength = 26
 
-    static let repoURL = URL(string: "https://github.com/jqssun/darwin-bt-remote")!
-    static let instructionsURL = URL(string: "https://github.com/jqssun/darwin-bt-remote/blob/main/README.md")!
+    static let repoURL = URL(string: "https://github.com/thisiskims/darwin-bt-remote")!
+    static let instructionsURL = URL(string: "https://github.com/thisiskims/darwin-bt-remote/blob/main/README.md")!
 
     static let defaultPointerSensitivity = 5.0
     static let pointerSensitivityRange = 0.5 ... 10.0
     static let defaultScrollSensitivity = 1.0
     static let scrollSensitivityRange = 0.5 ... 3.0
+    static let defaultIPadVirtualHeight = 900.0
+    static let ipadVirtualHeightRange = 500.0 ... 1600.0
 }

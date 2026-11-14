@@ -1,0 +1,43 @@
+name: Build macOS (Ad-Hoc)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap
+        env:
+          CI_PRIMARY_REPOSITORY_PATH: ${{ github.workspace }}
+        run: |
+          chmod +x ci_scripts/ci_post_clone.sh
+          ./ci_scripts/ci_post_clone.sh
+
+      - name: Build macOS App
+        run: |
+          xcodebuild \
+            -project BTRemote.xcodeproj \
+            -scheme BTRemote \
+            -configuration Release \
+            -destination "platform=macOS" \
+            -derivedDataPath .build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          codesign --force --deep --sign - --entitlements BTRemote/entitlements.plist .build/DerivedData/Build/Products/Release/BTRemote.app
+
+      - name: Package App
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent .build/DerivedData/Build/Products/Release/BTRemote.app dist/BTRemote-macOS.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTRemote-macOS
+          path: dist/BTRemote-macOS.zip

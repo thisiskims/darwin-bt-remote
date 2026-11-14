@@ -13,6 +13,8 @@ struct ContentView: View {
     #if os(macOS)
         @State private var showAccessibilityPrompt = false
         @State private var showConnectPrompt = false
+        @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
+        @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
     #endif
 
     private enum Tab {
@@ -36,10 +38,18 @@ struct ContentView: View {
             .background(PointerLockHost(locked: directInput.isCapturing))
         #endif
             .onChange(of: hid.isConnected) { connected in
-                guard connected else { return }
                 #if os(macOS)
-                    if !directInput.isCapturing { showConnectPrompt = true }
+                    if connected {
+                        if topEdgeCrossing {
+                            directInput.startEdgeMonitor(hid: hid, virtualHeight: ipadVirtualHeight)
+                        } else if !directInput.isCapturing {
+                            showConnectPrompt = true
+                        }
+                    } else {
+                        directInput.stopEdgeMonitor()
+                    }
                 #else
+                    guard connected else { return }
                     tab = .remote
                 #endif
             }
@@ -57,6 +67,16 @@ struct ContentView: View {
             .sheet(isPresented: $showGuide) { guideSheet }
         #if os(macOS)
             .frame(minWidth: 480, idealWidth: 560, minHeight: 640, idealHeight: 800)
+            .onChange(of: topEdgeCrossing) { enabled in
+                if enabled, hid.isConnected {
+                    directInput.startEdgeMonitor(hid: hid, virtualHeight: ipadVirtualHeight)
+                } else {
+                    directInput.stopEdgeMonitor()
+                }
+            }
+            .onChange(of: ipadVirtualHeight) { height in
+                directInput.updateVirtualHeight(height)
+            }
             .onChange(of: directInput.needsAccessibility) { needs in
                 guard needs else { return }
                 showAccessibilityPrompt = true

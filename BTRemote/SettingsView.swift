@@ -11,6 +11,10 @@ struct SettingsView: View {
     @AppStorage(HIDSettings.developerModeKey) private var developerMode = false
     @AppStorage(HIDSettings.forceServiceChangedKey) private var forceServiceChanged = true
     @AppStorage(AppSettings.hasSeenWelcomeKey) private var hasSeenWelcome = false
+    #if os(macOS)
+        @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
+        @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
+    #endif
     #if os(iOS)
         @AppStorage(AppSettings.autoAdvertiseKey) private var autoAdvertise = true
     #endif
@@ -36,6 +40,23 @@ struct SettingsView: View {
                 sensitivityRow(L10n.Settings.trackingSpeed, value: $touchpadSensitivity, range: AppSettings.pointerSensitivityRange)
                 sensitivityRow(L10n.Settings.scrollSpeed, value: $scrollSensitivity, range: AppSettings.scrollSensitivityRange)
             }
+            #if os(macOS)
+                Section(
+                    header: Text(verbatim: "Top Edge Crossing"),
+                    footer: Text(verbatim: "Push past the top edge of your Mac screen to control iPad. Push down past the bottom threshold or press Control + Option to return.")
+                ) {
+                    Toggle("Cross top edge to iPad", isOn: $topEdgeCrossing)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(verbatim: "iPad screen height")
+                            Spacer()
+                            Text(verbatim: "\(Int(ipadVirtualHeight)) pt")
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: $ipadVirtualHeight, in: AppSettings.ipadVirtualHeightRange, step: 50)
+                    }
+                }
+            #endif
             #if os(iOS)
                 Section(header: Text(L10n.Settings.connection), footer: Text(L10n.Settings.autoAdvertiseHint)) {
                     Toggle(L10n.Settings.autoAdvertise, isOn: $autoAdvertise)
