@@ -33,8 +33,11 @@
         private var pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
         private var residualX: Double = 0
         private var residualY: Double = 0
+        private var scrollResidual: Double = 0
         private var bottomPushAccum: Double = 0
         private var lastBottomPushTime: TimeInterval = 0
+        private var wasAtBottom = false
+        private var hitBottomTime: TimeInterval = 0
         private var entryMacLocation: CGPoint?
         private var edgeHID: HIDInput?
         private var accessibilityTimer: Timer?
@@ -145,6 +148,7 @@
         func stopEdgeMonitor() {
             if let edgeTap {
                 CGEvent.tapEnable(tap: edgeTap, enable: false)
+                CFMachPortInvalidate(edgeTap)
             }
             if let edgeRunLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), edgeRunLoopSource, .commonModes)
@@ -234,8 +238,11 @@
             entryTime = ProcessInfo.processInfo.systemUptime
             residualX = 0
             residualY = 0
+            scrollResidual = 0
             bottomPushAccum = 0
             lastBottomPushTime = 0
+            wasAtBottom = false
+            hitBottomTime = 0
             lastError = nil
 
             let trusted = AccessibilityPermission.isTrusted
@@ -298,6 +305,7 @@
         func stop() {
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: false)
+                CFMachPortInvalidate(eventTap)
             }
             if let runLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
@@ -410,9 +418,14 @@
                     pressedMouseButtons.remove(button)
                 }
                 sendMouse?(MouseReport(buttons: pressedMouseButtons))
-            case let .scroll(wheel):
-                sendMouse?(MouseReport(buttons: pressedMouseButtons, wheel: wheel))
-                sendMouse?(MouseReport(buttons: pressedMouseButtons))
+            case let .scroll(rawWheel):
+                scrollResidual += rawWheel
+                let step = Int(scrollResidual.rounded(.towardZero))
+                scrollResidual -= Double(step)
+                let wheel = Int8(max(-127, min(127, step)))
+                if wheel != 0 {
+                    sendMouse?(MouseReport(buttons: pressedMouseButtons, wheel: wheel))
+                }
             }
         }
 
@@ -439,13 +452,26 @@
             let nextY = virtualY + dy
             if nextY >= virtualHeight, dy > 0 {
                 virtualY = virtualHeight
+                if !wasAtBottom {
+                    // First contact with the virtual bottom edge: stop here instead of
+                    // letting one fast downward swipe overshoot straight back to Mac.
+                    wasAtBottom = true
+                    hitBottomTime = now
+                    bottomPushAccum = 0
+                    lastBottomPushTime = now
+                    return false
+                }
+                if now - hitBottomTime < 0.14 {
+                    return false
+                }
                 if now - lastBottomPushTime > 0.35 {
                     bottomPushAccum = 0
                 }
                 lastBottomPushTime = now
                 bottomPushAccum += dy
-                if bottomPushAccum >= 45 {
+                if bottomPushAccum >= 40 {
                     bottomPushAccum = 0
+                    wasAtBottom = false
                     if entryMacLocation == nil {
                         entryMacLocation = CGPoint(x: entryDisplayBounds.midX, y: entryDisplayBounds.minY)
                     }
@@ -456,6 +482,7 @@
 
             virtualY = max(0, min(virtualHeight, nextY))
             if dy < -0.5 {
+                wasAtBottom = false
                 bottomPushAccum = 0
             }
             return false
@@ -465,7 +492,7 @@
             guard !isCapturing, edgeCrossingEnabled, let hid = edgeHID, hid.isConnected else { return }
 
             let displayBounds = displayBounds(containing: location)
-            let isAtTopEdge = location.y <= displayBounds.minY + 2.0
+            let isAtTopEdge = location.y <= displayBounds.minY + 3.0
             guard isAtTopEdge else {
                 edgeTopPushAccum = 0
                 return
@@ -592,7 +619,7 @@
             case flagsChanged
             case mouseMove(Double, Double)
             case mouseButton(MouseButtons, Bool)
-            case scroll(Int8)
+            case scroll(Double)
         }
 
         let kind: Kind
@@ -622,9 +649,18 @@
                 guard let button = Self.mouseButton(for: type) else { return nil }
                 kind = .mouseButton(button.0, button.1)
             case .scrollWheel:
-                let wheel = Self.clampInt8(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
-                guard wheel != 0 else { return nil }
-                kind = .scroll(wheel)
+                let isContinuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
+                if isContinuous {
+                    let pointDelta = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+                    guard pointDelta != 0 else { return nil }
+                    // Negate Mac scroll delta so iPadOS direction matches Mac, and scale point deltas
+                    // down so trackpad scrolling is smooth rather than jumping multiple wheel notches.
+                    kind = .scroll(-pointDelta * 0.12)
+                } else {
+                    let wheel = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+                    guard wheel != 0 else { return nil }
+                    kind = .scroll(-wheel)
+                }
             default:
                 return nil
             }
