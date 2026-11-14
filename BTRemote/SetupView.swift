@@ -38,7 +38,6 @@ struct SetupView: View {
                     .formStyle(.grouped)
                     .navigationTitle(L10n.App.title)
             }
-            .onDisappear { directInput.stop() }
             .onChange(of: hid.isActive) { isActive in
                 if !isActive { directInput.stop() }
             }
@@ -325,6 +324,22 @@ struct SetupView: View {
             Section(header: Text(L10n.DirectInput.section), footer: Text(L10n.DirectInput.releaseHint)) {
                 Toggle(isOn: directInputBinding) {
                     Label(L10n.DirectInput.toggle, systemImage: "rectangle.and.hand.point.up.left")
+                }
+                HStack {
+                    Text(verbatim: "Top Edge Crossing")
+                    Spacer()
+                    if !AccessibilityPermission.isTrusted {
+                        Button("Grant Accessibility") { AccessibilityPermission.request() }
+                            .font(.caption)
+                    } else if directInput.isEdgeMonitoring {
+                        Text(verbatim: "Active")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    } else {
+                        Text(verbatim: hid.isConnected ? "Standby" : "Waiting for iPad")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 if let lastError = directInput.lastError {
                     Text(verbatim: lastError)

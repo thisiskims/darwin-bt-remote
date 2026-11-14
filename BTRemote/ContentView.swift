@@ -116,7 +116,15 @@ struct ContentView: View {
             showWelcome = true
         }
         #if os(macOS)
-            if hasSeenWelcome, !AccessibilityPermission.isTrusted { showAccessibilityPrompt = true }
+            if hasSeenWelcome, !AccessibilityPermission.isTrusted {
+                showAccessibilityPrompt = true
+            } else if hid.isConnected, topEdgeCrossing {
+                directInput.startEdgeMonitor(
+                    hid: hid,
+                    virtualHeight: ipadVirtualHeight,
+                    pointerSensitivity: macPointerSensitivity
+                )
+            }
         #endif
     }
 

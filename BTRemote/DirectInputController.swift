@@ -312,20 +312,20 @@
         private func handleEdgeMove(location: CGPoint, dy: Double) {
             guard !isCapturing, let hid = edgeHID, hid.isConnected else { return }
             let mainBounds = CGDisplayBounds(CGMainDisplayID())
-            let isAtTopEdge = location.y <= mainBounds.minY + 1.5
+            let isAtTopEdge = location.y <= mainBounds.minY + 2.0
             guard isAtTopEdge, dy < 0 else {
                 edgeTopPushAccum = 0
                 return
             }
 
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastEdgePushTime > 0.3 {
+            if now - lastEdgePushTime > 0.4 {
                 edgeTopPushAccum = 0
             }
             lastEdgePushTime = now
             edgeTopPushAccum += abs(dy)
 
-            if edgeTopPushAccum >= 12 {
+            if edgeTopPushAccum >= 4 {
                 edgeTopPushAccum = 0
                 let entry = CGPoint(x: location.x, y: mainBounds.minY)
                 start(
