@@ -40,18 +40,14 @@ struct ContentView: View {
         #endif
             .onChange(of: hid.isConnected) { connected in
                 #if os(macOS)
-                    if connected {
-                        if topEdgeCrossing {
-                            directInput.startEdgeMonitor(
-                                hid: hid,
-                                virtualHeight: ipadVirtualHeight,
-                                pointerSensitivity: macPointerSensitivity
-                            )
-                        } else if !directInput.isCapturing {
-                            showConnectPrompt = true
-                        }
-                    } else {
-                        directInput.stopEdgeMonitor()
+                    directInput.syncEdgeMonitor(
+                        enabled: topEdgeCrossing,
+                        hid: hid,
+                        virtualHeight: ipadVirtualHeight,
+                        pointerSensitivity: macPointerSensitivity
+                    )
+                    if connected, !topEdgeCrossing, !directInput.isCapturing {
+                        showConnectPrompt = true
                     }
                 #else
                     guard connected else { return }
@@ -73,15 +69,12 @@ struct ContentView: View {
         #if os(macOS)
             .frame(minWidth: 480, idealWidth: 560, minHeight: 640, idealHeight: 800)
             .onChange(of: topEdgeCrossing) { enabled in
-                if enabled, hid.isConnected {
-                    directInput.startEdgeMonitor(
-                        hid: hid,
-                        virtualHeight: ipadVirtualHeight,
-                        pointerSensitivity: macPointerSensitivity
-                    )
-                } else {
-                    directInput.stopEdgeMonitor()
-                }
+                directInput.syncEdgeMonitor(
+                    enabled: enabled,
+                    hid: hid,
+                    virtualHeight: ipadVirtualHeight,
+                    pointerSensitivity: macPointerSensitivity
+                )
             }
             .onChange(of: ipadVirtualHeight) { height in
                 directInput.updateVirtualHeight(height)
@@ -118,13 +111,13 @@ struct ContentView: View {
         #if os(macOS)
             if hasSeenWelcome, !AccessibilityPermission.isTrusted {
                 showAccessibilityPrompt = true
-            } else if hid.isConnected, topEdgeCrossing {
-                directInput.startEdgeMonitor(
-                    hid: hid,
-                    virtualHeight: ipadVirtualHeight,
-                    pointerSensitivity: macPointerSensitivity
-                )
             }
+            directInput.syncEdgeMonitor(
+                enabled: topEdgeCrossing,
+                hid: hid,
+                virtualHeight: ipadVirtualHeight,
+                pointerSensitivity: macPointerSensitivity
+            )
         #endif
     }
 

@@ -328,9 +328,13 @@ struct SetupView: View {
                 HStack {
                     Text(verbatim: "Top Edge Crossing")
                     Spacer()
-                    if !AccessibilityPermission.isTrusted {
+                    if !directInput.hasAccessibility {
                         Button("Grant Accessibility") { AccessibilityPermission.request() }
                             .font(.caption)
+                    } else if directInput.isCapturing {
+                        Text(verbatim: "Controlling iPad")
+                            .font(.caption)
+                            .foregroundColor(.blue)
                     } else if directInput.isEdgeMonitoring {
                         Text(verbatim: "Active")
                             .font(.caption)

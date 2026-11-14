@@ -9,6 +9,7 @@
         @Published private(set) var isEdgeMonitoring = false
         @Published private(set) var lastError: String?
         @Published private(set) var needsAccessibility = false
+        @Published private(set) var hasAccessibility = AccessibilityPermission.isTrusted
 
         private var eventTap: CFMachPort?
         private var runLoopSource: CFRunLoopSource?
@@ -20,22 +21,66 @@
         private var modifiers: KeyboardModifiers = []
         private var cursorHidden = false
 
+        private var edgeCrossingEnabled = false
         private var edgeTopPushAccum: Double = 0
         private var lastEdgePushTime: TimeInterval = 0
+        private var entryTime: TimeInterval = 0
+        private var entryDisplayBounds: CGRect = CGDisplayBounds(CGMainDisplayID())
+        private var virtualX: Double = 0
         private var virtualY: Double = AppSettings.defaultIPadVirtualHeight
         private var virtualHeight: Double = AppSettings.defaultIPadVirtualHeight
         private var pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
         private var residualX: Double = 0
         private var residualY: Double = 0
         private var bottomPushAccum: Double = 0
+        private var lastBottomPushTime: TimeInterval = 0
         private var entryMacLocation: CGPoint?
         private var edgeHID: HIDInput?
+        private var accessibilityTimer: Timer?
 
         private var sendKeyboard: ((KeyboardReport) -> Void)?
         private var sendMouse: ((MouseReport) -> Void)?
         private var onRelease: (() -> Void)?
 
+        init() {
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshAccessibilityAndArm()
+                }
+            }
+        }
+
+        func syncEdgeMonitor(
+            enabled: Bool,
+            hid: HIDInput,
+            virtualHeight: Double = AppSettings.defaultIPadVirtualHeight,
+            pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
+        ) {
+            edgeCrossingEnabled = enabled
+            edgeHID = hid
+            self.virtualHeight = virtualHeight
+            self.pointerSensitivity = pointerSensitivity
+
+            if enabled, hid.isConnected {
+                if !isCapturing {
+                    startEdgeMonitor(
+                        hid: hid,
+                        virtualHeight: virtualHeight,
+                        pointerSensitivity: pointerSensitivity
+                    )
+                }
+            } else {
+                stopEdgeMonitor()
+                stopAccessibilityPolling()
+            }
+        }
+
         func start(_ hid: HIDInput) {
+            edgeHID = hid
             start(sendKeyboard: hid.sendKeyboard, sendMouse: hid.sendMouse, onRelease: {})
         }
 
@@ -47,11 +92,18 @@
             self.virtualHeight = virtualHeight
             self.pointerSensitivity = pointerSensitivity
             edgeHID = hid
-            guard edgeTap == nil, !isCapturing else { return }
-            guard AccessibilityPermission.isTrusted else {
+            edgeCrossingEnabled = true
+
+            let trusted = AccessibilityPermission.isTrusted
+            hasAccessibility = trusted
+            guard trusted else {
                 needsAccessibility = true
+                startAccessibilityPolling()
                 return
             }
+            stopAccessibilityPolling()
+
+            guard edgeTap == nil, !isCapturing, hid.isConnected else { return }
 
             let mask = CGEventMask(1) << CGEventMask(CGEventType.mouseMoved.rawValue)
             let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
@@ -69,7 +121,7 @@
             edgeTap = tap
             edgeRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             if let edgeRunLoopSource {
-                CFRunLoopAddSource(CFRunLoopGetCurrent(), edgeRunLoopSource, .commonModes)
+                CFRunLoopAddSource(CFRunLoopGetMain(), edgeRunLoopSource, .commonModes)
             }
             CGEvent.tapEnable(tap: tap, enable: true)
             isEdgeMonitoring = true
@@ -80,12 +132,48 @@
                 CGEvent.tapEnable(tap: edgeTap, enable: false)
             }
             if let edgeRunLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), edgeRunLoopSource, .commonModes)
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), edgeRunLoopSource, .commonModes)
             }
             edgeTap = nil
             edgeRunLoopSource = nil
             edgeTopPushAccum = 0
             isEdgeMonitoring = false
+        }
+
+        private func refreshAccessibilityAndArm() {
+            let trusted = AccessibilityPermission.isTrusted
+            if hasAccessibility != trusted {
+                hasAccessibility = trusted
+            }
+            if trusted {
+                needsAccessibility = false
+                stopAccessibilityPolling()
+                if edgeCrossingEnabled, !isCapturing, let hid = edgeHID, hid.isConnected {
+                    startEdgeMonitor(
+                        hid: hid,
+                        virtualHeight: virtualHeight,
+                        pointerSensitivity: pointerSensitivity
+                    )
+                }
+            }
+        }
+
+        private func startAccessibilityPolling() {
+            guard accessibilityTimer == nil else { return }
+            accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.refreshAccessibilityAndArm()
+                    if self.hasAccessibility || !self.edgeCrossingEnabled {
+                        self.stopAccessibilityPolling()
+                    }
+                }
+            }
+        }
+
+        private func stopAccessibilityPolling() {
+            accessibilityTimer?.invalidate()
+            accessibilityTimer = nil
         }
 
         func updateVirtualHeight(_ height: Double) {
@@ -112,14 +200,22 @@
             pressedKeys.removeAll()
             pressedMouseButtons = []
             modifiers = []
-            virtualY = max(0, virtualHeight - 24)
+            let bounds = entryLocation.map { displayBounds(containing: $0) } ?? CGDisplayBounds(CGMainDisplayID())
+            entryDisplayBounds = bounds
+            virtualX = entryLocation?.x ?? bounds.midX
+            virtualY = max(0, virtualHeight - 60)
+            entryTime = ProcessInfo.processInfo.systemUptime
             residualX = 0
             residualY = 0
             bottomPushAccum = 0
+            lastBottomPushTime = 0
             lastError = nil
 
-            guard AccessibilityPermission.isTrusted else {
+            let trusted = AccessibilityPermission.isTrusted
+            hasAccessibility = trusted
+            guard trusted else {
                 needsAccessibility = true
+                startAccessibilityPolling()
                 clearHandlers()
                 onRelease()
                 return
@@ -162,7 +258,7 @@
             eventTap = tap
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             if let runLoopSource {
-                CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+                CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
             }
             CGEvent.tapEnable(tap: tap, enable: true)
             CGAssociateMouseAndMouseCursorPosition(boolean_t(0))
@@ -177,7 +273,7 @@
                 CGEvent.tapEnable(tap: eventTap, enable: false)
             }
             if let runLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
             }
             eventTap = nil
             runLoopSource = nil
@@ -188,7 +284,7 @@
             }
             CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
             if let entry = entryMacLocation {
-                CGWarpMouseCursorPosition(CGPoint(x: entry.x, y: entry.y + 12))
+                CGWarpMouseCursorPosition(CGPoint(x: virtualX, y: entry.y + 12))
                 entryMacLocation = nil
             }
 
@@ -200,6 +296,14 @@
             clearHandlers()
             hideStatusItem()
             isCapturing = false
+
+            if edgeCrossingEnabled, let hid = edgeHID, hid.isConnected {
+                startEdgeMonitor(
+                    hid: hid,
+                    virtualHeight: virtualHeight,
+                    pointerSensitivity: pointerSensitivity
+                )
+            }
         }
 
         func clearAccessibilityRequest() {
@@ -257,6 +361,7 @@
                 sendKeyboardReport()
             case let .mouseMove(rawDX, rawDY):
                 let (dx, dy) = scaleDelta(rawDX: rawDX, rawDY: rawDY)
+                virtualX = max(entryDisplayBounds.minX, min(entryDisplayBounds.maxX - 1, virtualX + Double(dx)))
                 if shouldReturnFromBottom(dy: Double(dy)) {
                     let release = onRelease
                     stop()
@@ -279,9 +384,9 @@
             }
         }
 
-        private func scaleDelta(rawDX: Int64, rawDY: Int64) -> (Int8, Int8) {
-            residualX += Double(rawDX) * pointerSensitivity
-            residualY += Double(rawDY) * pointerSensitivity
+        private func scaleDelta(rawDX: Double, rawDY: Double) -> (Int8, Int8) {
+            residualX += rawDX * pointerSensitivity
+            residualY += rawDY * pointerSensitivity
             let ix = Int(residualX.rounded(.towardZero))
             let iy = Int(residualY.rounded(.towardZero))
             residualX -= Double(ix)
@@ -293,57 +398,107 @@
         }
 
         private func shouldReturnFromBottom(dy: Double) -> Bool {
-            guard entryMacLocation != nil else { return false }
+            guard edgeCrossingEnabled else { return false }
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - entryTime < 0.35 {
+                return false
+            }
+
             let nextY = virtualY + dy
             if nextY >= virtualHeight, dy > 0 {
                 virtualY = virtualHeight
-                bottomPushAccum += dy
-                if bottomPushAccum >= 6 {
+                if now - lastBottomPushTime > 0.5 {
                     bottomPushAccum = 0
+                }
+                lastBottomPushTime = now
+                bottomPushAccum += dy
+                if bottomPushAccum >= 20 {
+                    bottomPushAccum = 0
+                    if entryMacLocation == nil {
+                        let mainBounds = CGDisplayBounds(CGMainDisplayID())
+                        entryMacLocation = CGPoint(x: virtualX, y: mainBounds.minY)
+                    }
                     return true
                 }
                 return false
             }
+
             virtualY = max(0, min(virtualHeight, nextY))
-            bottomPushAccum = 0
+            if dy < -1.0 {
+                bottomPushAccum = 0
+            }
             return false
         }
 
         private func handleEdgeMove(location: CGPoint, dy: Double) {
-            guard !isCapturing, let hid = edgeHID, hid.isConnected else { return }
-            let mainBounds = CGDisplayBounds(CGMainDisplayID())
-            let isAtTopEdge = location.y <= mainBounds.minY + 2.0
-            guard isAtTopEdge, dy < 0 else {
+            guard !isCapturing, edgeCrossingEnabled, let hid = edgeHID, hid.isConnected else { return }
+
+            let displayBounds = displayBounds(containing: location)
+            let isAtTopEdge = location.y <= displayBounds.minY + 2.0
+            guard isAtTopEdge else {
+                edgeTopPushAccum = 0
+                return
+            }
+
+            // Do not cross if another macOS display sits directly above this point.
+            guard !hasDisplayAbove(point: location, currentTopY: displayBounds.minY) else {
                 edgeTopPushAccum = 0
                 return
             }
 
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastEdgePushTime > 0.4 {
+            if dy > 0.5 {
+                edgeTopPushAccum = 0
+                return
+            }
+            if now - lastEdgePushTime > 0.45 {
                 edgeTopPushAccum = 0
             }
+            guard dy < 0 else { return }
+
             lastEdgePushTime = now
             edgeTopPushAccum += abs(dy)
 
-            if edgeTopPushAccum >= 4 {
+            if edgeTopPushAccum >= 4.0 {
                 edgeTopPushAccum = 0
-                let entry = CGPoint(x: location.x, y: mainBounds.minY)
+                let entry = CGPoint(x: location.x, y: displayBounds.minY)
                 start(
                     sendKeyboard: hid.sendKeyboard,
                     sendMouse: hid.sendMouse,
                     entryLocation: entry,
-                    onRelease: { [weak self] in
-                        Task { @MainActor in
-                            guard let self, let currentHID = self.edgeHID, currentHID.isConnected else { return }
-                            self.startEdgeMonitor(
-                                hid: currentHID,
-                                virtualHeight: self.virtualHeight,
-                                pointerSensitivity: self.pointerSensitivity
-                            )
-                        }
-                    }
+                    onRelease: {}
                 )
             }
+        }
+
+        private func displayBounds(containing point: CGPoint) -> CGRect {
+            var displayID = CGMainDisplayID()
+            var count: UInt32 = 0
+            if CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0 {
+                return CGDisplayBounds(displayID)
+            }
+            return CGDisplayBounds(CGMainDisplayID())
+        }
+
+        private func hasDisplayAbove(point: CGPoint, currentTopY: CGFloat) -> Bool {
+            var displayCount: UInt32 = 0
+            guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 1 else {
+                return false
+            }
+            var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+            guard CGGetActiveDisplayList(displayCount, &displays, &displayCount) == .success else {
+                return false
+            }
+            for id in displays.prefix(Int(displayCount)) {
+                let bounds = CGDisplayBounds(id)
+                if bounds.maxY <= currentTopY + 1.0,
+                   point.x >= bounds.minX,
+                   point.x <= bounds.maxX
+                {
+                    return true
+                }
+            }
+            return false
         }
 
         private func sendKeyboardReport() {
@@ -351,44 +506,40 @@
         }
 
         private nonisolated static let edgeTapCallback: CGEventTapCallBack = { _, type, cgEvent, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(cgEvent) }
+            let controller = Unmanaged<DirectInputController>.fromOpaque(userInfo).takeUnretainedValue()
+
             guard type != .tapDisabledByTimeout, type != .tapDisabledByUserInput else {
-                if let userInfo {
-                    let controller = Unmanaged<DirectInputController>.fromOpaque(userInfo).takeUnretainedValue()
-                    Task { @MainActor in
-                        controller.edgeTap.map { CGEvent.tapEnable(tap: $0, enable: true) }
-                    }
+                MainActor.assumeIsolated {
+                    controller.edgeTap.map { CGEvent.tapEnable(tap: $0, enable: true) }
                 }
                 return Unmanaged.passUnretained(cgEvent)
             }
 
-            if let userInfo {
-                let location = cgEvent.location
-                let dy = Double(cgEvent.getIntegerValueField(.mouseEventDeltaY))
-                let controller = Unmanaged<DirectInputController>.fromOpaque(userInfo).takeUnretainedValue()
-                Task { @MainActor in
-                    controller.handleEdgeMove(location: location, dy: dy)
-                }
+            let location = cgEvent.location
+            let (_, dy) = DirectInputEvent.mouseDeltas(from: cgEvent)
+            MainActor.assumeIsolated {
+                controller.handleEdgeMove(location: location, dy: dy)
             }
             return Unmanaged.passUnretained(cgEvent)
         }
 
         private nonisolated static let eventTapCallback: CGEventTapCallBack = { _, type, cgEvent, userInfo in
+            guard let userInfo else { return nil }
+            let controller = Unmanaged<DirectInputController>.fromOpaque(userInfo).takeUnretainedValue()
+
             guard type != .tapDisabledByTimeout, type != .tapDisabledByUserInput else {
-                if let userInfo {
-                    let controller = Unmanaged<DirectInputController>.fromOpaque(userInfo).takeUnretainedValue()
-                    Task { @MainActor in
-                        controller.eventTap.map { CGEvent.tapEnable(tap: $0, enable: true) }
-                    }
+                MainActor.assumeIsolated {
+                    controller.eventTap.map { CGEvent.tapEnable(tap: $0, enable: true) }
                 }
                 return nil
             }
 
-            guard let userInfo, let event = DirectInputEvent(type: type, event: cgEvent) else {
+            guard let event = DirectInputEvent(type: type, event: cgEvent) else {
                 return nil
             }
 
-            let controller = Unmanaged<DirectInputController>.fromOpaque(userInfo).takeUnretainedValue()
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 controller.handle(event)
             }
             return nil
@@ -400,7 +551,7 @@
             case keyDown(Keycode)
             case keyUp(Keycode)
             case flagsChanged
-            case mouseMove(Int64, Int64)
+            case mouseMove(Double, Double)
             case mouseButton(MouseButtons, Bool)
             case scroll(Int8)
         }
@@ -425,8 +576,7 @@
             case .flagsChanged:
                 kind = .flagsChanged
             case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-                let dx = event.getIntegerValueField(.mouseEventDeltaX)
-                let dy = event.getIntegerValueField(.mouseEventDeltaY)
+                let (dx, dy) = Self.mouseDeltas(from: event)
                 guard dx != 0 || dy != 0 else { return nil }
                 kind = .mouseMove(dx, dy)
             case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
@@ -439,6 +589,20 @@
             default:
                 return nil
             }
+        }
+
+        static func mouseDeltas(from event: CGEvent) -> (Double, Double) {
+            if let nsEvent = NSEvent(cgEvent: event) {
+                let dx = Double(nsEvent.deltaX)
+                let dy = Double(nsEvent.deltaY)
+                if dx != 0 || dy != 0 {
+                    return (dx, dy)
+                }
+            }
+            return (
+                Double(event.getIntegerValueField(.mouseEventDeltaX)),
+                Double(event.getIntegerValueField(.mouseEventDeltaY))
+            )
         }
 
         private static func clampInt8(_ value: Int64) -> Int8 {

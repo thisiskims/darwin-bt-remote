@@ -48,12 +48,13 @@ public final class HIDPeripheral: NSObject, ObservableObject {
     /// replayed on reads + new subscriptions
     private var cachedReports: [UInt8: Data]
 
-    private var pendingBroadcast: (Data, CBMutableCharacteristic)?
+    private var pendingReports: [(Data, CBMutableCharacteristic)] = []
     private var pendingMouseChar: CBMutableCharacteristic?
     private var pendingMouseDX: Int = 0
     private var pendingMouseDY: Int = 0
     private var pendingMouseWheel: Int = 0
     private var pendingMouseButtons: UInt8 = 0
+    private var lastSentMouseButtons: UInt8 = 0
     private var hasPendingMouse = false
 
     public init(profile: any HIDProfile) {
@@ -99,12 +100,13 @@ public final class HIDPeripheral: NSObject, ObservableObject {
         isAdvertising = false
         isHIDServiceAdded = false
         isReadyToSendNotification = true
-        pendingBroadcast = nil
+        pendingReports.removeAll()
         pendingMouseChar = nil
         pendingMouseDX = 0
         pendingMouseDY = 0
         pendingMouseWheel = 0
         pendingMouseButtons = 0
+        lastSentMouseButtons = 0
         hasPendingMouse = false
         batteryServiceObj = nil
         deviceInfoServiceObj = nil
@@ -369,6 +371,11 @@ public final class HIDPeripheral: NSObject, ObservableObject {
         let wheel = Int(Int8(bitPattern: data[data.startIndex + 3]))
 
         if !isReadyToSendNotification || hasPendingMouse {
+            // Preserve button state transitions instead of overwriting clicks during backpressure.
+            if hasPendingMouse, buttons != pendingMouseButtons {
+                let buttonPacket = Data([buttons, 0, 0, 0])
+                enqueueReport(buttonPacket, for: char)
+            }
             pendingMouseChar = char
             pendingMouseButtons = buttons
             pendingMouseDX += dx
@@ -382,7 +389,9 @@ public final class HIDPeripheral: NSObject, ObservableObject {
         }
 
         let accepted = pManager.updateValue(data, for: char, onSubscribedCentrals: recipients)
-        if !accepted {
+        if accepted {
+            lastSentMouseButtons = buttons
+        } else {
             isReadyToSendNotification = false
             pendingMouseChar = char
             pendingMouseButtons = buttons
@@ -394,19 +403,29 @@ public final class HIDPeripheral: NSObject, ObservableObject {
         return accepted
     }
 
+    private func enqueueReport(_ data: Data, for char: CBMutableCharacteristic) {
+        if pendingReports.count >= 64 {
+            pendingReports.removeFirst()
+        }
+        pendingReports.append((data, char))
+    }
+
     @discardableResult
     private func updateValue(_ data: Data, for char: CBMutableCharacteristic) -> Bool {
         guard let pManager else { return false }
         let recipients = activeRecipients()
         guard !recipients.isEmpty else { return false }
-        if !isReadyToSendNotification {
-            pendingBroadcast = (data, char)
+        if !isReadyToSendNotification || !pendingReports.isEmpty {
+            enqueueReport(data, for: char)
+            if isReadyToSendNotification {
+                drainPendingBroadcast()
+            }
             return false
         }
         let accepted = pManager.updateValue(data, for: char, onSubscribedCentrals: recipients)
         if !accepted {
             isReadyToSendNotification = false
-            pendingBroadcast = (data, char)
+            enqueueReport(data, for: char)
         }
         return accepted
     }
@@ -416,7 +435,7 @@ public final class HIDPeripheral: NSObject, ObservableObject {
         let recipients = activeRecipients()
         guard !recipients.isEmpty else { return }
 
-        if hasPendingMouse, let char = pendingMouseChar {
+        while hasPendingMouse, let char = pendingMouseChar {
             let sendDX = max(-127, min(127, pendingMouseDX))
             let sendDY = max(-127, min(127, pendingMouseDY))
             let sendWheel = max(-127, min(127, pendingMouseWheel))
@@ -428,6 +447,7 @@ public final class HIDPeripheral: NSObject, ObservableObject {
             ])
             let accepted = pManager.updateValue(packet, for: char, onSubscribedCentrals: recipients)
             if accepted {
+                lastSentMouseButtons = pendingMouseButtons
                 pendingMouseDX -= sendDX
                 pendingMouseDY -= sendDY
                 pendingMouseWheel -= sendWheel
@@ -438,12 +458,15 @@ public final class HIDPeripheral: NSObject, ObservableObject {
             }
         }
 
-        guard let (data, char) = pendingBroadcast else { return }
-        pendingBroadcast = nil
-        let accepted = pManager.updateValue(data, for: char, onSubscribedCentrals: recipients)
-        if !accepted {
-            isReadyToSendNotification = false
-            pendingBroadcast = (data, char)
+        while !pendingReports.isEmpty {
+            let (data, char) = pendingReports[0]
+            let accepted = pManager.updateValue(data, for: char, onSubscribedCentrals: recipients)
+            if accepted {
+                pendingReports.removeFirst()
+            } else {
+                isReadyToSendNotification = false
+                return
+            }
         }
     }
 
