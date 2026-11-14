@@ -28,6 +28,7 @@
         private var entryDisplayBounds: CGRect = CGDisplayBounds(CGMainDisplayID())
         private var virtualX: Double = 0
         private var virtualY: Double = AppSettings.defaultIPadVirtualHeight
+        private var virtualWidth: Double = AppSettings.defaultIPadVirtualWidth
         private var virtualHeight: Double = AppSettings.defaultIPadVirtualHeight
         private var pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
         private var residualX: Double = 0
@@ -57,11 +58,13 @@
         func syncEdgeMonitor(
             enabled: Bool,
             hid: HIDInput,
+            virtualWidth: Double = AppSettings.defaultIPadVirtualWidth,
             virtualHeight: Double = AppSettings.defaultIPadVirtualHeight,
             pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
         ) {
             edgeCrossingEnabled = enabled
             edgeHID = hid
+            self.virtualWidth = virtualWidth
             self.virtualHeight = virtualHeight
             self.pointerSensitivity = pointerSensitivity
 
@@ -69,6 +72,7 @@
                 if !isCapturing {
                     startEdgeMonitor(
                         hid: hid,
+                        virtualWidth: virtualWidth,
                         virtualHeight: virtualHeight,
                         pointerSensitivity: pointerSensitivity
                     )
@@ -86,9 +90,11 @@
 
         func startEdgeMonitor(
             hid: HIDInput,
+            virtualWidth: Double = AppSettings.defaultIPadVirtualWidth,
             virtualHeight: Double = AppSettings.defaultIPadVirtualHeight,
             pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
         ) {
+            self.virtualWidth = virtualWidth
             self.virtualHeight = virtualHeight
             self.pointerSensitivity = pointerSensitivity
             edgeHID = hid
@@ -101,9 +107,15 @@
                 startAccessibilityPolling()
                 return
             }
-            stopAccessibilityPolling()
 
-            guard edgeTap == nil, !isCapturing, hid.isConnected else { return }
+            guard !isCapturing, hid.isConnected else {
+                stopAccessibilityPolling()
+                return
+            }
+            if edgeTap != nil {
+                stopAccessibilityPolling()
+                return
+            }
 
             let mask = CGEventMask(1) << CGEventMask(CGEventType.mouseMoved.rawValue)
             let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
@@ -115,9 +127,12 @@
                 callback: DirectInputController.edgeTapCallback,
                 userInfo: refcon
             ) else {
+                // Retry automatically if WindowServer or tap creation wasn't ready yet.
+                startAccessibilityPolling()
                 return
             }
 
+            stopAccessibilityPolling()
             edgeTap = tap
             edgeRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             if let edgeRunLoopSource {
@@ -147,13 +162,15 @@
             }
             if trusted {
                 needsAccessibility = false
-                stopAccessibilityPolling()
                 if edgeCrossingEnabled, !isCapturing, let hid = edgeHID, hid.isConnected {
                     startEdgeMonitor(
                         hid: hid,
+                        virtualWidth: virtualWidth,
                         virtualHeight: virtualHeight,
                         pointerSensitivity: pointerSensitivity
                     )
+                } else {
+                    stopAccessibilityPolling()
                 }
             }
         }
@@ -164,7 +181,7 @@
                 Task { @MainActor in
                     guard let self else { return }
                     self.refreshAccessibilityAndArm()
-                    if self.hasAccessibility || !self.edgeCrossingEnabled {
+                    if self.isEdgeMonitoring || !self.edgeCrossingEnabled || self.isCapturing {
                         self.stopAccessibilityPolling()
                     }
                 }
@@ -174,6 +191,10 @@
         private func stopAccessibilityPolling() {
             accessibilityTimer?.invalidate()
             accessibilityTimer = nil
+        }
+
+        func updateVirtualWidth(_ width: Double) {
+            virtualWidth = width
         }
 
         func updateVirtualHeight(_ height: Double) {
@@ -202,8 +223,14 @@
             modifiers = []
             let bounds = entryLocation.map { displayBounds(containing: $0) } ?? CGDisplayBounds(CGMainDisplayID())
             entryDisplayBounds = bounds
-            virtualX = Double(entryLocation?.x ?? bounds.midX)
-            virtualY = max(0, virtualHeight - 60)
+            let effectiveWidth = min(Double(bounds.width), virtualWidth)
+            let zoneMinX = Double(bounds.midX) - effectiveWidth / 2.0
+            if let entryLocation {
+                virtualX = max(0, min(effectiveWidth, Double(entryLocation.x) - zoneMinX))
+            } else {
+                virtualX = effectiveWidth / 2.0
+            }
+            virtualY = max(0, virtualHeight * 0.75)
             entryTime = ProcessInfo.processInfo.systemUptime
             residualX = 0
             residualY = 0
@@ -284,7 +311,10 @@
             }
             CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
             if let entry = entryMacLocation {
-                CGWarpMouseCursorPosition(CGPoint(x: virtualX, y: entry.y + 12))
+                let effectiveWidth = min(Double(entryDisplayBounds.width), virtualWidth)
+                let zoneMinX = Double(entryDisplayBounds.midX) - effectiveWidth / 2.0
+                let macX = zoneMinX + max(0, min(effectiveWidth, virtualX))
+                CGWarpMouseCursorPosition(CGPoint(x: macX, y: Double(entry.y) + 12))
                 entryMacLocation = nil
             }
 
@@ -300,6 +330,7 @@
             if edgeCrossingEnabled, let hid = edgeHID, hid.isConnected {
                 startEdgeMonitor(
                     hid: hid,
+                    virtualWidth: virtualWidth,
                     virtualHeight: virtualHeight,
                     pointerSensitivity: pointerSensitivity
                 )
@@ -361,7 +392,8 @@
                 sendKeyboardReport()
             case let .mouseMove(rawDX, rawDY):
                 let (dx, dy) = scaleDelta(rawDX: rawDX, rawDY: rawDY)
-                virtualX = max(entryDisplayBounds.minX, min(entryDisplayBounds.maxX - 1, virtualX + Double(dx)))
+                let effectiveWidth = min(Double(entryDisplayBounds.width), virtualWidth)
+                virtualX = max(0, min(effectiveWidth, virtualX + Double(dx)))
                 if shouldReturnFromBottom(dy: Double(dy)) {
                     let release = onRelease
                     stop()
@@ -400,23 +432,22 @@
         private func shouldReturnFromBottom(dy: Double) -> Bool {
             guard edgeCrossingEnabled else { return false }
             let now = ProcessInfo.processInfo.systemUptime
-            if now - entryTime < 0.35 {
+            if now - entryTime < 0.45 {
                 return false
             }
 
             let nextY = virtualY + dy
             if nextY >= virtualHeight, dy > 0 {
                 virtualY = virtualHeight
-                if now - lastBottomPushTime > 0.5 {
+                if now - lastBottomPushTime > 0.35 {
                     bottomPushAccum = 0
                 }
                 lastBottomPushTime = now
                 bottomPushAccum += dy
-                if bottomPushAccum >= 20 {
+                if bottomPushAccum >= 45 {
                     bottomPushAccum = 0
                     if entryMacLocation == nil {
-                        let mainBounds = CGDisplayBounds(CGMainDisplayID())
-                        entryMacLocation = CGPoint(x: virtualX, y: mainBounds.minY)
+                        entryMacLocation = CGPoint(x: entryDisplayBounds.midX, y: entryDisplayBounds.minY)
                     }
                     return true
                 }
@@ -424,7 +455,7 @@
             }
 
             virtualY = max(0, min(virtualHeight, nextY))
-            if dy < -1.0 {
+            if dy < -0.5 {
                 bottomPushAccum = 0
             }
             return false
@@ -436,6 +467,14 @@
             let displayBounds = displayBounds(containing: location)
             let isAtTopEdge = location.y <= displayBounds.minY + 2.0
             guard isAtTopEdge else {
+                edgeTopPushAccum = 0
+                return
+            }
+
+            let effectiveWidth = min(Double(displayBounds.width), virtualWidth)
+            let zoneMinX = Double(displayBounds.midX) - effectiveWidth / 2.0
+            let zoneMaxX = Double(displayBounds.midX) + effectiveWidth / 2.0
+            guard Double(location.x) >= zoneMinX, Double(location.x) <= zoneMaxX else {
                 edgeTopPushAccum = 0
                 return
             }

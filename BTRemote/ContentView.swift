@@ -14,6 +14,7 @@ struct ContentView: View {
         @State private var showAccessibilityPrompt = false
         @State private var showConnectPrompt = false
         @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
+        @AppStorage(AppSettings.ipadVirtualWidthKey) private var ipadVirtualWidth = AppSettings.defaultIPadVirtualWidth
         @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
         @AppStorage(AppSettings.macPointerSensitivityKey) private var macPointerSensitivity = AppSettings.defaultMacPointerSensitivity
     #endif
@@ -43,6 +44,7 @@ struct ContentView: View {
                     directInput.syncEdgeMonitor(
                         enabled: topEdgeCrossing,
                         hid: hid,
+                        virtualWidth: ipadVirtualWidth,
                         virtualHeight: ipadVirtualHeight,
                         pointerSensitivity: macPointerSensitivity
                     )
@@ -72,9 +74,13 @@ struct ContentView: View {
                 directInput.syncEdgeMonitor(
                     enabled: enabled,
                     hid: hid,
+                    virtualWidth: ipadVirtualWidth,
                     virtualHeight: ipadVirtualHeight,
                     pointerSensitivity: macPointerSensitivity
                 )
+            }
+            .onChange(of: ipadVirtualWidth) { width in
+                directInput.updateVirtualWidth(width)
             }
             .onChange(of: ipadVirtualHeight) { height in
                 directInput.updateVirtualHeight(height)
@@ -115,6 +121,7 @@ struct ContentView: View {
             directInput.syncEdgeMonitor(
                 enabled: topEdgeCrossing,
                 hid: hid,
+                virtualWidth: ipadVirtualWidth,
                 virtualHeight: ipadVirtualHeight,
                 pointerSensitivity: macPointerSensitivity
             )

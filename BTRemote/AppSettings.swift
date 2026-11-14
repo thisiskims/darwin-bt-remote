@@ -10,6 +10,7 @@ enum AppSettings {
     static let remoteModeKey = "remoteMode"
     static let transportKey = "transport"
     static let topEdgeCrossingKey = "topEdgeCrossing"
+    static let ipadVirtualWidthKey = "ipadVirtualWidth"
     static let ipadVirtualHeightKey = "ipadVirtualHeight"
     static let macPointerSensitivityKey = "macPointerSensitivity"
 
@@ -22,8 +23,10 @@ enum AppSettings {
     static let pointerSensitivityRange = 0.5 ... 10.0
     static let defaultScrollSensitivity = 1.0
     static let scrollSensitivityRange = 0.5 ... 3.0
-    static let defaultIPadVirtualHeight = 500.0
-    static let ipadVirtualHeightRange = 250.0 ... 1000.0
+    static let defaultIPadVirtualWidth = 900.0
+    static let ipadVirtualWidthRange = 400.0 ... 1600.0
+    static let defaultIPadVirtualHeight = 820.0
+    static let ipadVirtualHeightRange = 400.0 ... 1600.0
     static let defaultMacPointerSensitivity = 1.5
     static let macPointerSensitivityRange = 0.5 ... 5.0
 }

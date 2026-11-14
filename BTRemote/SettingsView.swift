@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.hasSeenWelcomeKey) private var hasSeenWelcome = false
     #if os(macOS)
         @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
+        @AppStorage(AppSettings.ipadVirtualWidthKey) private var ipadVirtualWidth = AppSettings.defaultIPadVirtualWidth
         @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
         @AppStorage(AppSettings.macPointerSensitivityKey) private var macPointerSensitivity = AppSettings.defaultMacPointerSensitivity
     #endif
@@ -56,6 +57,15 @@ struct SettingsView: View {
                                 + Text(verbatim: "×").foregroundColor(.secondary)
                         }
                         Slider(value: $macPointerSensitivity, in: AppSettings.macPointerSensitivityRange, step: 0.1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(verbatim: "iPad screen width (centered)")
+                            Spacer()
+                            Text(verbatim: "\(Int(ipadVirtualWidth)) pt")
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: $ipadVirtualWidth, in: AppSettings.ipadVirtualWidthRange, step: 50)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {

@@ -19,6 +19,10 @@ struct SetupView: View {
     #if os(macOS)
         @EnvironmentObject private var classic: HIDClassicDevice
         @AppStorage(AppSettings.transportKey) private var transport = Transport.lowEnergy
+        @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
+        @AppStorage(AppSettings.ipadVirtualWidthKey) private var ipadVirtualWidth = AppSettings.defaultIPadVirtualWidth
+        @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
+        @AppStorage(AppSettings.macPointerSensitivityKey) private var macPointerSensitivity = AppSettings.defaultMacPointerSensitivity
     #endif
 
     @Environment(\.hid) private var hid
@@ -40,6 +44,24 @@ struct SetupView: View {
             }
             .onChange(of: hid.isActive) { isActive in
                 if !isActive { directInput.stop() }
+            }
+            .onAppear {
+                directInput.syncEdgeMonitor(
+                    enabled: topEdgeCrossing,
+                    hid: hid,
+                    virtualWidth: ipadVirtualWidth,
+                    virtualHeight: ipadVirtualHeight,
+                    pointerSensitivity: macPointerSensitivity
+                )
+            }
+            .onChange(of: hid.isConnected) { _ in
+                directInput.syncEdgeMonitor(
+                    enabled: topEdgeCrossing,
+                    hid: hid,
+                    virtualWidth: ipadVirtualWidth,
+                    virtualHeight: ipadVirtualHeight,
+                    pointerSensitivity: macPointerSensitivity
+                )
             }
         #else
             NavigationView {
