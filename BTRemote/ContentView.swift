@@ -15,6 +15,7 @@ struct ContentView: View {
         @State private var showConnectPrompt = false
         @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
         @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
+        @AppStorage(AppSettings.macPointerSensitivityKey) private var macPointerSensitivity = AppSettings.defaultMacPointerSensitivity
     #endif
 
     private enum Tab {
@@ -41,7 +42,11 @@ struct ContentView: View {
                 #if os(macOS)
                     if connected {
                         if topEdgeCrossing {
-                            directInput.startEdgeMonitor(hid: hid, virtualHeight: ipadVirtualHeight)
+                            directInput.startEdgeMonitor(
+                                hid: hid,
+                                virtualHeight: ipadVirtualHeight,
+                                pointerSensitivity: macPointerSensitivity
+                            )
                         } else if !directInput.isCapturing {
                             showConnectPrompt = true
                         }
@@ -69,13 +74,20 @@ struct ContentView: View {
             .frame(minWidth: 480, idealWidth: 560, minHeight: 640, idealHeight: 800)
             .onChange(of: topEdgeCrossing) { enabled in
                 if enabled, hid.isConnected {
-                    directInput.startEdgeMonitor(hid: hid, virtualHeight: ipadVirtualHeight)
+                    directInput.startEdgeMonitor(
+                        hid: hid,
+                        virtualHeight: ipadVirtualHeight,
+                        pointerSensitivity: macPointerSensitivity
+                    )
                 } else {
                     directInput.stopEdgeMonitor()
                 }
             }
             .onChange(of: ipadVirtualHeight) { height in
                 directInput.updateVirtualHeight(height)
+            }
+            .onChange(of: macPointerSensitivity) { sensitivity in
+                directInput.updatePointerSensitivity(sensitivity)
             }
             .onChange(of: directInput.needsAccessibility) { needs in
                 guard needs else { return }

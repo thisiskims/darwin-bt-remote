@@ -14,6 +14,7 @@ struct SettingsView: View {
     #if os(macOS)
         @AppStorage(AppSettings.topEdgeCrossingKey) private var topEdgeCrossing = true
         @AppStorage(AppSettings.ipadVirtualHeightKey) private var ipadVirtualHeight = AppSettings.defaultIPadVirtualHeight
+        @AppStorage(AppSettings.macPointerSensitivityKey) private var macPointerSensitivity = AppSettings.defaultMacPointerSensitivity
     #endif
     #if os(iOS)
         @AppStorage(AppSettings.autoAdvertiseKey) private var autoAdvertise = true
@@ -46,6 +47,16 @@ struct SettingsView: View {
                     footer: Text(verbatim: "Push past the top edge of your Mac screen to control iPad. Push down past the bottom threshold or press Control + Option to return.")
                 ) {
                     Toggle("Cross top edge to iPad", isOn: $topEdgeCrossing)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(verbatim: "iPad pointer speed")
+                            Spacer()
+                            Text(macPointerSensitivity, format: .number.precision(.fractionLength(1)))
+                                .foregroundColor(.secondary)
+                                + Text(verbatim: "×").foregroundColor(.secondary)
+                        }
+                        Slider(value: $macPointerSensitivity, in: AppSettings.macPointerSensitivityRange, step: 0.5)
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(verbatim: "iPad screen height")

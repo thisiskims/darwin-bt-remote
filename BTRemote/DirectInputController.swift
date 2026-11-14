@@ -22,8 +22,11 @@
 
         private var edgeTopPushAccum: Double = 0
         private var lastEdgePushTime: TimeInterval = 0
-        private var virtualY: Double = 900
-        private var virtualHeight: Double = 900
+        private var virtualY: Double = AppSettings.defaultIPadVirtualHeight
+        private var virtualHeight: Double = AppSettings.defaultIPadVirtualHeight
+        private var pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
+        private var residualX: Double = 0
+        private var residualY: Double = 0
         private var bottomPushAccum: Double = 0
         private var entryMacLocation: CGPoint?
         private var edgeHID: HIDInput?
@@ -36,8 +39,13 @@
             start(sendKeyboard: hid.sendKeyboard, sendMouse: hid.sendMouse, onRelease: {})
         }
 
-        func startEdgeMonitor(hid: HIDInput, virtualHeight: Double = AppSettings.defaultIPadVirtualHeight) {
+        func startEdgeMonitor(
+            hid: HIDInput,
+            virtualHeight: Double = AppSettings.defaultIPadVirtualHeight,
+            pointerSensitivity: Double = AppSettings.defaultMacPointerSensitivity
+        ) {
             self.virtualHeight = virtualHeight
+            self.pointerSensitivity = pointerSensitivity
             edgeHID = hid
             guard edgeTap == nil, !isCapturing else { return }
             guard AccessibilityPermission.isTrusted else {
@@ -84,6 +92,10 @@
             virtualHeight = height
         }
 
+        func updatePointerSensitivity(_ sensitivity: Double) {
+            pointerSensitivity = sensitivity
+        }
+
         func start(
             sendKeyboard: @escaping (KeyboardReport) -> Void,
             sendMouse: @escaping (MouseReport) -> Void,
@@ -98,7 +110,9 @@
             pressedKeys.removeAll()
             pressedMouseButtons = []
             modifiers = []
-            virtualY = virtualHeight
+            virtualY = max(0, virtualHeight - 24)
+            residualX = 0
+            residualY = 0
             bottomPushAccum = 0
             lastError = nil
 
@@ -172,7 +186,7 @@
             }
             CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
             if let entry = entryMacLocation {
-                CGWarpMouseCursorPosition(CGPoint(x: entry.x, y: entry.y + 6))
+                CGWarpMouseCursorPosition(CGPoint(x: entry.x, y: entry.y + 8))
                 entryMacLocation = nil
             }
 
@@ -238,9 +252,16 @@
                 sendKeyboardReport()
             case .flagsChanged:
                 sendKeyboardReport()
-            case let .mouseMove(dx, dy):
-                sendMouse?(MouseReport(buttons: pressedMouseButtons, dX: dx, dY: dy))
-                trackVirtualReturn(dy: Double(dy))
+            case let .mouseMove(rawDX, rawDY):
+                let (dx, dy) = scaleDelta(rawDX: rawDX, rawDY: rawDY)
+                if shouldReturnFromBottom(dy: Double(dy)) {
+                    onRelease?()
+                    stop()
+                    return
+                }
+                if dx != 0 || dy != 0 {
+                    sendMouse?(MouseReport(buttons: pressedMouseButtons, dX: dx, dY: dy))
+                }
             case let .mouseButton(button, isDown):
                 if isDown {
                     pressedMouseButtons.insert(button)
@@ -254,19 +275,34 @@
             }
         }
 
-        private func trackVirtualReturn(dy: Double) {
-            guard entryMacLocation != nil else { return }
-            virtualY = max(0, min(virtualHeight, virtualY + dy))
-            if virtualY >= virtualHeight, dy > 0 {
+        private func scaleDelta(rawDX: Int64, rawDY: Int64) -> (Int8, Int8) {
+            residualX += Double(rawDX) * pointerSensitivity
+            residualY += Double(rawDY) * pointerSensitivity
+            let ix = Int(residualX.rounded(.towardZero))
+            let iy = Int(residualY.rounded(.towardZero))
+            residualX -= Double(ix)
+            residualY -= Double(iy)
+            return (
+                Int8(max(-127, min(127, ix))),
+                Int8(max(-127, min(127, iy)))
+            )
+        }
+
+        private func shouldReturnFromBottom(dy: Double) -> Bool {
+            guard entryMacLocation != nil else { return false }
+            let nextY = virtualY + dy
+            if nextY >= virtualHeight, dy > 0 {
+                virtualY = virtualHeight
                 bottomPushAccum += dy
-                if bottomPushAccum >= 18 {
+                if bottomPushAccum >= 6 {
                     bottomPushAccum = 0
-                    onRelease?()
-                    stop()
+                    return true
                 }
-            } else {
-                bottomPushAccum = 0
+                return false
             }
+            virtualY = max(0, min(virtualHeight, nextY))
+            bottomPushAccum = 0
+            return false
         }
 
         private func handleEdgeMove(location: CGPoint, dy: Double) {
@@ -294,7 +330,11 @@
                     onRelease: { [weak self] in
                         Task { @MainActor in
                             guard let self, let currentHID = self.edgeHID, currentHID.isConnected else { return }
-                            self.startEdgeMonitor(hid: currentHID, virtualHeight: self.virtualHeight)
+                            self.startEdgeMonitor(
+                                hid: currentHID,
+                                virtualHeight: self.virtualHeight,
+                                pointerSensitivity: self.pointerSensitivity
+                            )
                         }
                     }
                 )
@@ -355,7 +395,7 @@
             case keyDown(Keycode)
             case keyUp(Keycode)
             case flagsChanged
-            case mouseMove(Int8, Int8)
+            case mouseMove(Int64, Int64)
             case mouseButton(MouseButtons, Bool)
             case scroll(Int8)
         }
@@ -380,8 +420,8 @@
             case .flagsChanged:
                 kind = .flagsChanged
             case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-                let dx = Self.clampInt8(event.getIntegerValueField(.mouseEventDeltaX))
-                let dy = Self.clampInt8(event.getIntegerValueField(.mouseEventDeltaY))
+                let dx = event.getIntegerValueField(.mouseEventDeltaX)
+                let dy = event.getIntegerValueField(.mouseEventDeltaY)
                 guard dx != 0 || dy != 0 else { return nil }
                 kind = .mouseMove(dx, dy)
             case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
