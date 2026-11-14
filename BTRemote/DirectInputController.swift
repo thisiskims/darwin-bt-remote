@@ -202,7 +202,7 @@
             modifiers = []
             let bounds = entryLocation.map { displayBounds(containing: $0) } ?? CGDisplayBounds(CGMainDisplayID())
             entryDisplayBounds = bounds
-            virtualX = entryLocation?.x ?? bounds.midX
+            virtualX = Double(entryLocation?.x ?? bounds.midX)
             virtualY = max(0, virtualHeight - 60)
             entryTime = ProcessInfo.processInfo.systemUptime
             residualX = 0
