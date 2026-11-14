@@ -99,6 +99,7 @@
         func start(
             sendKeyboard: @escaping (KeyboardReport) -> Void,
             sendMouse: @escaping (MouseReport) -> Void,
+            entryLocation: CGPoint? = nil,
             onRelease: @escaping () -> Void
         ) {
             stop()
@@ -106,6 +107,7 @@
 
             self.sendKeyboard = sendKeyboard
             self.sendMouse = sendMouse
+            self.entryMacLocation = entryLocation
             self.onRelease = onRelease
             pressedKeys.removeAll()
             pressedMouseButtons = []
@@ -186,7 +188,7 @@
             }
             CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
             if let entry = entryMacLocation {
-                CGWarpMouseCursorPosition(CGPoint(x: entry.x, y: entry.y + 8))
+                CGWarpMouseCursorPosition(CGPoint(x: entry.x, y: entry.y + 12))
                 entryMacLocation = nil
             }
 
@@ -236,8 +238,9 @@
 
         private func handle(_ event: DirectInputEvent) {
             if event.releaseShortcutPressed {
-                onRelease?()
+                let release = onRelease
                 stop()
+                release?()
                 return
             }
 
@@ -255,8 +258,9 @@
             case let .mouseMove(rawDX, rawDY):
                 let (dx, dy) = scaleDelta(rawDX: rawDX, rawDY: rawDY)
                 if shouldReturnFromBottom(dy: Double(dy)) {
-                    onRelease?()
+                    let release = onRelease
                     stop()
+                    release?()
                     return
                 }
                 if dx != 0 || dy != 0 {
@@ -323,10 +327,11 @@
 
             if edgeTopPushAccum >= 12 {
                 edgeTopPushAccum = 0
-                entryMacLocation = CGPoint(x: location.x, y: mainBounds.minY)
+                let entry = CGPoint(x: location.x, y: mainBounds.minY)
                 start(
                     sendKeyboard: hid.sendKeyboard,
                     sendMouse: hid.sendMouse,
+                    entryLocation: entry,
                     onRelease: { [weak self] in
                         Task { @MainActor in
                             guard let self, let currentHID = self.edgeHID, currentHID.isConnected else { return }

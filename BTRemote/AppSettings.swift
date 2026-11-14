@@ -22,8 +22,8 @@ enum AppSettings {
     static let pointerSensitivityRange = 0.5 ... 10.0
     static let defaultScrollSensitivity = 1.0
     static let scrollSensitivityRange = 0.5 ... 3.0
-    static let defaultIPadVirtualHeight = 600.0
-    static let ipadVirtualHeightRange = 300.0 ... 1200.0
-    static let defaultMacPointerSensitivity = 3.0
-    static let macPointerSensitivityRange = 1.0 ... 8.0
+    static let defaultIPadVirtualHeight = 500.0
+    static let ipadVirtualHeightRange = 250.0 ... 1000.0
+    static let defaultMacPointerSensitivity = 1.5
+    static let macPointerSensitivityRange = 0.5 ... 5.0
 }

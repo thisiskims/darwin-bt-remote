@@ -55,7 +55,7 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                                 + Text(verbatim: "×").foregroundColor(.secondary)
                         }
-                        Slider(value: $macPointerSensitivity, in: AppSettings.macPointerSensitivityRange, step: 0.5)
+                        Slider(value: $macPointerSensitivity, in: AppSettings.macPointerSensitivityRange, step: 0.1)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
